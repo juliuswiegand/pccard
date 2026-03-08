@@ -137,13 +137,6 @@ class PCCard extends HTMLElement {
       warn_color: '#f59e0b',
       ok_color: '#22c55e',
       gauge_size: 90,
-      show_cpu: true,
-      show_ram: true,
-      show_gpu: true,
-      show_disk: true,
-      show_temperature: true,
-      show_network: true,
-      show_uptime: true,
       show_actions: true,
       columns: 4,
       compact: false,
@@ -611,27 +604,23 @@ class PCCard extends HTMLElement {
     const gaugesItems = [];
     const gs = clamp(cfg.gauge_size || 90, 60, 140);
 
-    if (cfg.cpu_sensor && cfg.show_cpu !== false)
+    if (cfg.cpu_sensor)
       gaugesItems.push(renderGauge(cpu, 100, 'CPU', '%', this._accentColor(cpu, 75, 90), gs));
-    if (cfg.ram_sensor && cfg.show_ram !== false)
+    if (cfg.ram_sensor)
       gaugesItems.push(renderGauge(ram, 100, 'RAM', '%', this._accentColor(ram, 80, 90), gs));
-    if (cfg.gpu_sensor && cfg.show_gpu !== false)
+    if (cfg.gpu_sensor)
       gaugesItems.push(renderGauge(gpu, 100, 'GPU', '%', this._accentColor(gpu, 75, 90), gs));
-    if (cfg.disk_sensor && cfg.show_disk !== false)
+    if (cfg.disk_sensor)
       gaugesItems.push(renderGauge(disk, 100, 'Disk', '%', this._accentColor(disk, 85, 95), gs));
-    if (cfg.temperature_sensor && cfg.show_temperature !== false) {
-      const tempColor = this._accentColor(temp, 70, 85);
-      gaugesItems.push(renderGauge(temp, 100, 'Temp', '°C', tempColor, gs));
-    }
+    if (cfg.temperature_sensor)
+      gaugesItems.push(renderGauge(temp, 100, 'Temp', '°C', this._accentColor(temp, 70, 85), gs));
 
     // Stats chips
     const statsChips = [];
-    if (cfg.network_up_sensor && cfg.show_network !== false) {
+    if (cfg.network_up_sensor)
       statsChips.push({ icon: 'mdi:upload-network', value: formatBytes(netUp), label: 'Upload' });
-    }
-    if (cfg.network_down_sensor && cfg.show_network !== false) {
+    if (cfg.network_down_sensor)
       statsChips.push({ icon: 'mdi:download-network', value: formatBytes(netDown), label: 'Download' });
-    }
 
     // Action buttons definition
     const allActions = [
@@ -697,7 +686,7 @@ class PCCard extends HTMLElement {
             </div>
             <div class="header-info">
               <div class="header-title">${cfg.title || 'PC'}</div>
-              ${cfg.show_uptime !== false && uptime ? `<div class="header-uptime">Uptime: ${formatUptime(uptime)}</div>` : ''}
+              ${cfg.uptime_sensor && uptime ? `<div class="header-uptime">Uptime: ${formatUptime(uptime)}</div>` : ''}
             </div>
             <div class="status-badge ${statusClass}">
               <div class="status-dot"></div>
@@ -766,8 +755,8 @@ class PCCard extends HTMLElement {
   getCardSize() {
     let size = 3;
     const cfg = this._config;
-    if (cfg.show_cpu !== false || cfg.show_ram !== false || cfg.show_gpu !== false || cfg.show_disk !== false || cfg.show_temperature !== false) size += 2;
-    if (this._config.show_network !== false) size += 1;
+    if (cfg.cpu_sensor || cfg.ram_sensor || cfg.gpu_sensor || cfg.disk_sensor || cfg.temperature_sensor) size += 2;
+    if (cfg.network_up_sensor || cfg.network_down_sensor) size += 1;
     return size;
   }
 
@@ -800,17 +789,10 @@ const SENSOR_SCHEMA = [
 ];
 
 const LAYOUT_SCHEMA = [
-  { name: 'columns',    selector: { number: { min: 2, max: 6, mode: 'box' } } },
-  { name: 'gauge_size', selector: { number: { min: 60, max: 140, mode: 'slider' } } },
-  { name: 'show_cpu',          selector: { boolean: {} } },
-  { name: 'show_ram',          selector: { boolean: {} } },
-  { name: 'show_gpu',          selector: { boolean: {} } },
-  { name: 'show_disk',         selector: { boolean: {} } },
-  { name: 'show_temperature',  selector: { boolean: {} } },
-  { name: 'show_network',      selector: { boolean: {} } },
-  { name: 'show_uptime',       selector: { boolean: {} } },
-  { name: 'show_actions',      selector: { boolean: {} } },
-  { name: 'compact',           selector: { boolean: {} } },
+  { name: 'columns',      selector: { number: { min: 2, max: 6, mode: 'box' } } },
+  { name: 'gauge_size',   selector: { number: { min: 60, max: 140, mode: 'slider' } } },
+  { name: 'show_actions', selector: { boolean: {} } },
+  { name: 'compact',      selector: { boolean: {} } },
 ];
 
 const WOL_SCHEMA = [
@@ -838,13 +820,6 @@ const LABELS = {
   uptime_sensor: 'Uptime (seconds)',
   columns: 'Gauge Columns',
   gauge_size: 'Gauge Size (px)',
-  show_cpu: 'Show CPU Gauge',
-  show_ram: 'Show RAM Gauge',
-  show_gpu: 'Show GPU Gauge',
-  show_disk: 'Show Disk Gauge',
-  show_temperature: 'Show Temperature Gauge',
-  show_network: 'Show Network Stats',
-  show_uptime: 'Show Uptime',
   show_actions: 'Show Quick Actions',
   compact: 'Compact Mode',
   wol_mac: 'MAC Address (e.g. AA:BB:CC:DD:EE:FF)',
@@ -951,7 +926,7 @@ class PCCardEditor extends HTMLElement {
       const input = document.createElement('input');
       input.type = 'color';
       input.value = this._config[key] || '#ffffff';
-      input.addEventListener('input', () => {
+      input.addEventListener('change', () => {
         this._config = { ...this._config, [key]: input.value };
         this._dispatch();
       });
