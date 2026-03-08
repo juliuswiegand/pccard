@@ -1,0 +1,9 @@
+{
+  "name": "PC Dashboard Card",
+  "description": "A highly configurable Home Assistant card to monitor and control your PC — system gauges, network stats, and context-aware action buttons.",
+  "render_readme": true,
+  "version": "1.0.0",
+  "homeassistant": "2023.1.0",
+  "filename": "pc-card.js",
+  "content_in_root": true
+}
