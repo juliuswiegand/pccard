@@ -773,6 +773,10 @@ class PCCardEditor extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    // Keep existing pickers in sync without a full re-render
+    this.shadowRoot.querySelectorAll('ha-entity-picker').forEach(p => {
+      p.hass = hass;
+    });
   }
 
   setConfig(config) {
@@ -788,6 +792,7 @@ class PCCardEditor extends HTMLElement {
     }));
   }
 
+  // Plain text / number input
   _field(key, label, type = 'text', hint = '') {
     const val = this._config[key] ?? '';
     return `
@@ -797,6 +802,42 @@ class PCCardEditor extends HTMLElement {
         <input type="${type}" name="${key}" value="${val}" placeholder="${hint || label}"/>
       </div>
     `;
+  }
+
+  // Placeholder slot — filled imperatively with ha-entity-picker after innerHTML is set
+  _entityPicker(key, label, domain = '') {
+    return `
+      <div class="field">
+        <div class="entity-picker-slot"
+             data-key="${key}"
+             data-label="${label}"
+             data-domain="${domain}">
+        </div>
+      </div>
+    `;
+  }
+
+  // Hydrate every .entity-picker-slot with a real ha-entity-picker element
+  _hydrateEntityPickers() {
+    this.shadowRoot.querySelectorAll('.entity-picker-slot').forEach(slot => {
+      const key = slot.dataset.key;
+      const label = slot.dataset.label;
+      const domain = slot.dataset.domain;
+
+      const picker = document.createElement('ha-entity-picker');
+      picker.hass = this._hass;
+      picker.value = this._config[key] || '';
+      picker.label = label;
+      picker.allowCustomEntity = true;
+      if (domain) picker.includeDomains = domain.split(',');
+
+      picker.addEventListener('value-changed', (e) => {
+        this._config = { ...this._config, [key]: e.detail.value || undefined };
+        this._dispatch();
+      });
+
+      slot.appendChild(picker);
+    });
   }
 
   _toggle(key, label) {
@@ -821,11 +862,49 @@ class PCCardEditor extends HTMLElement {
     return `
       <div class="action-group">
         <div class="action-group-label">${label}</div>
-        <input type="text" name="${key}_service" value="${a.service || ''}" placeholder="domain.service"/>
-        <input type="text" name="${key}_target" value="${a.target ? JSON.stringify(a.target) : ''}" placeholder='Target JSON e.g. {"entity_id":"button.x"}'/>
-        <input type="text" name="${key}_data" value="${a.data ? JSON.stringify(a.data) : ''}" placeholder='Data JSON e.g. {"mac":"AA:BB:CC:DD:EE:FF"}'/>
+        <div class="action-row-label">Service (domain.service)</div>
+        <input type="text" name="${key}_service" value="${a.service || ''}" placeholder="e.g. button.press"/>
+        <div class="action-row-label" style="margin-top:6px">Target entity (optional)</div>
+        <div class="entity-picker-slot action-entity-slot"
+             data-action-key="${key}"
+             data-label="Target entity">
+        </div>
+        <div class="action-row-label" style="margin-top:6px">Extra data JSON (optional)</div>
+        <input type="text" name="${key}_data" value="${a.data ? JSON.stringify(a.data) : ''}" placeholder='e.g. {"mac":"AA:BB:CC:DD:EE:FF"}'/>
       </div>
     `;
+  }
+
+  // Hydrate action entity pickers (separate from sensor pickers)
+  _hydrateActionPickers() {
+    this.shadowRoot.querySelectorAll('.action-entity-slot').forEach(slot => {
+      const actionKey = slot.dataset.actionKey;
+      const label = slot.dataset.label;
+      const current = this._config[`${actionKey}_action`] || {};
+      const currentEntityId = current.target?.entity_id || '';
+
+      const picker = document.createElement('ha-entity-picker');
+      picker.hass = this._hass;
+      picker.value = currentEntityId;
+      picker.label = label;
+      picker.allowCustomEntity = true;
+
+      picker.addEventListener('value-changed', (e) => {
+        const actionKey2 = slot.dataset.actionKey;
+        const actionCfgKey = `${actionKey2}_action`;
+        const existing = { ...this._config[actionCfgKey] };
+        const val = e.detail.value;
+        if (val) {
+          existing.target = { entity_id: val };
+        } else {
+          delete existing.target;
+        }
+        this._config = { ...this._config, [actionCfgKey]: existing };
+        this._dispatch();
+      });
+
+      slot.appendChild(picker);
+    });
   }
 
   _render() {
@@ -843,7 +922,9 @@ class PCCardEditor extends HTMLElement {
         .field { margin-bottom: 10px; }
         .field label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; color: var(--primary-text-color); }
         .hint { font-size: 11px; color: var(--secondary-text-color); margin-bottom: 4px; }
-        .field input[type="text"], .field input[type="number"], .field input[type="color"] {
+        /* ha-entity-picker fills its container naturally */
+        .entity-picker-slot ha-entity-picker { display: block; }
+        .field input[type="text"], .field input[type="number"] {
           width: 100%; box-sizing: border-box;
           padding: 7px 10px; border-radius: 8px;
           border: 1px solid var(--divider-color, #ddd);
@@ -859,11 +940,13 @@ class PCCardEditor extends HTMLElement {
         input:checked + .slider { background: var(--primary-color, #4f8ef7); }
         input:checked + .slider:before { transform: translateX(18px); }
         .action-group { margin-bottom: 12px; background: var(--secondary-background-color, #f5f5f5); border-radius: 10px; padding: 10px; }
-        .action-group-label { font-size: 12px; font-weight: 700; margin-bottom: 6px; color: var(--primary-text-color); }
-        .action-group input { width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, white); color: var(--primary-text-color); font-size: 12px; margin-bottom: 5px; font-family: monospace; }
+        .action-group-label { font-size: 12px; font-weight: 700; margin-bottom: 8px; color: var(--primary-text-color); }
+        .action-row-label { font-size: 11px; color: var(--secondary-text-color); margin-bottom: 3px; }
+        .action-group input[type="text"] { width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, white); color: var(--primary-text-color); font-size: 12px; font-family: monospace; }
+        .action-entity-slot ha-entity-picker { display: block; }
         .color-row { display: flex; gap: 8px; flex-wrap: wrap; }
         .color-item { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: var(--secondary-text-color); }
-        .color-item input { width: 40px; height: 32px; padding: 0; border: none; background: none; cursor: pointer; border-radius: 6px; }
+        .color-item input[type="color"] { width: 40px; height: 32px; padding: 0; border: none; background: none; cursor: pointer; border-radius: 6px; }
         select { width: 100%; box-sizing: border-box; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, white); color: var(--primary-text-color); font-size: 13px; }
       </style>
       <div class="editor">
@@ -895,37 +978,44 @@ class PCCardEditor extends HTMLElement {
         </div>
 
         ${this._section('Sensors')}
-        ${this._field('pc_state_sensor', 'PC State Sensor', 'text', 'binary_sensor.pc_online')}
-        ${this._field('cpu_sensor', 'CPU Usage Sensor', 'text', 'sensor.pc_cpu_usage')}
-        ${this._field('ram_sensor', 'RAM Usage Sensor', 'text', 'sensor.pc_memory_usage')}
-        ${this._field('disk_sensor', 'Disk Usage Sensor', 'text', 'sensor.pc_disk_usage')}
-        ${this._field('temperature_sensor', 'CPU Temp Sensor', 'text', 'sensor.pc_cpu_temp')}
-        ${this._field('network_up_sensor', 'Upload Speed Sensor', 'text', 'sensor.pc_network_upload')}
-        ${this._field('network_down_sensor', 'Download Speed Sensor', 'text', 'sensor.pc_network_download')}
-        ${this._field('uptime_sensor', 'Uptime Sensor (seconds)', 'text', 'sensor.pc_uptime')}
+        ${this._entityPicker('pc_state_sensor',    'PC State Sensor',          'binary_sensor')}
+        ${this._entityPicker('cpu_sensor',          'CPU Usage Sensor',         'sensor')}
+        ${this._entityPicker('ram_sensor',          'RAM Usage Sensor',         'sensor')}
+        ${this._entityPicker('disk_sensor',         'Disk Usage Sensor',        'sensor')}
+        ${this._entityPicker('temperature_sensor',  'CPU Temp Sensor',          'sensor')}
+        ${this._entityPicker('network_up_sensor',   'Upload Speed Sensor',      'sensor')}
+        ${this._entityPicker('network_down_sensor', 'Download Speed Sensor',    'sensor')}
+        ${this._entityPicker('uptime_sensor',       'Uptime Sensor (seconds)',  'sensor')}
 
         ${this._section('Layout')}
-        ${this._field('columns', 'Gauge Columns', 'number')}
-        ${this._field('gauge_size', 'Gauge Size (px)', 'number')}
-        ${this._toggle('show_gauges', 'Show Gauges')}
-        ${this._toggle('show_network', 'Show Network Stats')}
+        ${this._field('columns',    'Gauge Columns',  'number')}
+        ${this._field('gauge_size', 'Gauge Size (px)','number')}
+        ${this._toggle('show_gauges',      'Show Gauges')}
+        ${this._toggle('show_network',     'Show Network Stats')}
         ${this._toggle('show_temperature', 'Show Temperature')}
-        ${this._toggle('show_uptime', 'Show Uptime')}
-        ${this._toggle('compact', 'Compact Mode')}
+        ${this._toggle('show_uptime',      'Show Uptime')}
+        ${this._toggle('compact',          'Compact Mode')}
 
         ${this._section('Actions (only shown when state matches)')}
-        ${this._actionFields('boot', 'Boot / Wake on LAN (shown when Offline)')}
-        ${this._actionFields('shutdown', 'Shutdown (shown when Online)')}
-        ${this._actionFields('restart', 'Restart (shown when Online)')}
-        ${this._actionFields('lock', 'Lock (shown when Online)')}
-        ${this._actionFields('sleep', 'Sleep (shown when Online)')}
+        ${this._actionFields('boot',     'Boot / Wake on LAN — shown when Offline')}
+        ${this._actionFields('shutdown', 'Shutdown — shown when Online')}
+        ${this._actionFields('restart',  'Restart — shown when Online')}
+        ${this._actionFields('lock',     'Lock — shown when Online')}
+        ${this._actionFields('sleep',    'Sleep — shown when Online')}
 
       </div>
     `;
 
-    // Attach listeners
-    this.shadowRoot.querySelectorAll('input, select').forEach(el => {
+    // Hydrate entity pickers (must happen after innerHTML is set)
+    this._hydrateEntityPickers();
+    this._hydrateActionPickers();
+
+    // Attach listeners for plain inputs / selects / checkboxes
+    this.shadowRoot.querySelectorAll('input:not([type="color"]), select').forEach(el => {
       el.addEventListener('change', () => this._handleChange(el));
+    });
+    this.shadowRoot.querySelectorAll('input[type="color"]').forEach(el => {
+      el.addEventListener('input', () => this._handleChange(el));
     });
   }
 
@@ -933,18 +1023,18 @@ class PCCardEditor extends HTMLElement {
     const name = el.name;
     const value = el.type === 'checkbox' ? el.checked : el.value;
 
-    // Action fields
-    const actionMatch = name.match(/^(boot|shutdown|restart|lock|sleep)_(service|target|data)$/);
+    // Action service / data fields
+    const actionMatch = name.match(/^(boot|shutdown|restart|lock|sleep)_(service|data)$/);
     if (actionMatch) {
       const [, key, part] = actionMatch;
-      const actionKey = `${key}_action`;
-      const current = { ...this._config[actionKey] };
+      const actionCfgKey = `${key}_action`;
+      const current = { ...this._config[actionCfgKey] };
       if (part === 'service') {
         current.service = value;
       } else {
         try { current[part] = value ? JSON.parse(value) : undefined; } catch (e) {}
       }
-      this._config = { ...this._config, [actionKey]: current };
+      this._config = { ...this._config, [actionCfgKey]: current };
     } else if (name === 'columns' || name === 'gauge_size') {
       this._config = { ...this._config, [name]: parseInt(value) || undefined };
     } else if (el.type === 'checkbox') {

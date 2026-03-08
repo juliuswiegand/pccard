@@ -23,9 +23,8 @@ A beautiful, highly configurable [Home Assistant](https://www.home-assistant.io/
 ### Via HACS (recommended)
 
 1. Open HACS → **Frontend** → top-right menu → **Custom repositories**
-2. Add `https://github.com/YOUR_USERNAME/pc-card` with category **Lovelace**
+2. Add `https://github.com/YOUR_USERNAME/pc-card` with category **Dashboard/Lovelace**
 3. Install **PC Dashboard Card**
-4. Add to Lovelace resources (HACS does this automatically)
 
 ### Manual
 
