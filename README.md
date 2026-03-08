@@ -8,32 +8,22 @@ A beautiful, highly configurable [Home Assistant](https://www.home-assistant.io/
 
 ## Features
 
-- **Arc gauges** for CPU, RAM, disk usage, and CPU temperature (color-coded: green → amber → red)
+- **Arc gauges** for CPU, RAM, GPU, disk usage, and CPU temperature (color-coded: green / amber / red)
 - **Network stats** chips for upload/download speed
 - **Uptime** display in the header
 - **Status badge** (Online / Offline / Unknown) with animated pulse
-- **Context-aware buttons** — boot only shows when the PC is offline; shutdown/restart/lock/sleep only show when online
+- **Context-aware buttons** -- boot only shows when the PC is offline; shutdown/restart/lock/sleep only show when online
 - **3-second cooldown** on buttons to prevent accidental double-presses
+- **Every gauge and section is individually toggleable**
 - **Fully configurable** via the visual editor or YAML
 
 ---
 
 ## Installation
 
-### Via HACS (recommended)
-
-1. Open HACS → **Frontend** → top-right menu → **Custom repositories**
+1. Open HACS -> **Frontend** -> top-right menu -> **Custom repositories**
 2. Add `https://github.com/YOUR_USERNAME/pc-card` with category **Dashboard/Lovelace**
 3. Install **PC Dashboard Card**
-
-### Manual
-
-1. Copy `pc-card.js` to `config/www/pc-card/pc-card.js`
-2. In HA, go to **Settings → Dashboards → Resources** and add:
-   ```
-   URL: /local/pc-card/pc-card.js
-   Type: JavaScript module
-   ```
 
 ---
 
@@ -49,14 +39,8 @@ title: Gaming PC
 pc_state_sensor: binary_sensor.pc_online
 cpu_sensor: sensor.pc_cpu_usage
 ram_sensor: sensor.pc_memory_usage
-shutdown_action:
-  service: button.press
-  target:
-    entity_id: button.pc_shutdown
-boot_action:
-  service: wake_on_lan.send_magic_packet
-  data:
-    mac: "AA:BB:CC:DD:EE:FF"
+shutdown_entity: button.pc_shutdown
+wol_mac: "AA:BB:CC:DD:EE:FF"
 ```
 
 ### Full example
@@ -71,59 +55,46 @@ icon: mdi:desktop-tower-monitor
 pc_state_sensor: binary_sensor.pc_online
 
 # ── Sensors (all optional) ─────────────────────────────────────────────────
-cpu_sensor: sensor.pc_cpu_usage          # 0–100 %
-ram_sensor: sensor.pc_memory_usage       # 0–100 %
-disk_sensor: sensor.pc_disk_usage        # 0–100 %
+cpu_sensor: sensor.pc_cpu_usage          # 0-100 %
+ram_sensor: sensor.pc_memory_usage       # 0-100 %
+gpu_sensor: sensor.pc_gpu_usage          # 0-100 %
+disk_sensor: sensor.pc_disk_usage        # 0-100 %
 temperature_sensor: sensor.pc_cpu_temp   # degrees Celsius
 network_up_sensor: sensor.pc_network_upload     # MB/s
 network_down_sensor: sensor.pc_network_download # MB/s
 uptime_sensor: sensor.pc_uptime          # seconds
 
-# ── Actions ────────────────────────────────────────────────────────────────
-# boot_action is shown ONLY when pc_state_sensor is OFF (offline)
-boot_action:
-  service: wake_on_lan.send_magic_packet
-  data:
-    mac: "AA:BB:CC:DD:EE:FF"
+# ── Wake on LAN (shown when offline) ──────────────────────────────────────
+wol_mac: "AA:BB:CC:DD:EE:FF"
 
-# The following are shown ONLY when pc_state_sensor is ON (online)
-shutdown_action:
-  service: button.press
-  target:
-    entity_id: button.pc_shutdown
+# ── Actions (shown when online) ───────────────────────────────────────────
+# Just pick a button, switch, or script entity — the card calls the right
+# service automatically.
+shutdown_entity: button.pc_shutdown
+restart_entity: button.pc_restart
+lock_entity: button.pc_lock
+sleep_entity: button.pc_sleep
 
-restart_action:
-  service: button.press
-  target:
-    entity_id: button.pc_restart
-
-lock_action:
-  service: button.press
-  target:
-    entity_id: button.pc_lock
-
-sleep_action:
-  service: button.press
-  target:
-    entity_id: button.pc_sleep
-
-# ── Visual ─────────────────────────────────────────────────────────────────
-background: glass        # default | dark | glass | gradient | none
+# ── Colors ─────────────────────────────────────────────────────────────────
 accent_color: "#4f8ef7"
 ok_color: "#22c55e"
 warn_color: "#f59e0b"
 danger_color: "#ef4444"
 
 # ── Layout ─────────────────────────────────────────────────────────────────
-columns: 4          # gauge columns (2–6)
-gauge_size: 90      # gauge size in px (60–140)
+columns: 4          # gauge columns (2-6)
+gauge_size: 90      # gauge size in px (60-140)
 compact: false      # tighter padding
 
 # ── Toggles ────────────────────────────────────────────────────────────────
-show_gauges: true
-show_network: true
+show_cpu: true
+show_ram: true
+show_gpu: true
+show_disk: true
 show_temperature: true
+show_network: true
 show_uptime: true
+show_actions: true
 ```
 
 ---
@@ -132,7 +103,7 @@ show_uptime: true
 
 | Sensor | Integration |
 |--------|-------------|
-| CPU / RAM / Disk | [System Bridge](https://github.com/timmo001/system-bridge) or [HASS Agent](https://github.com/LAB02-Research/HASS.Agent) |
+| CPU / RAM / GPU / Disk | [System Bridge](https://github.com/timmo001/system-bridge) or [HASS Agent](https://github.com/LAB02-Research/HASS.Agent) |
 | Network speed | System Bridge / HASS Agent |
 | CPU temperature | System Bridge / HASS Agent |
 | Online/offline | [HASS Agent](https://github.com/LAB02-Research/HASS.Agent) (provides a binary sensor) |
@@ -147,20 +118,20 @@ show_uptime: true
 |--------|------|---------|-------------|
 | `title` | string | `My PC` | Card title |
 | `icon` | string | `mdi:desktop-tower-monitor` | Header icon |
-| `pc_state_sensor` | entity | — | Binary sensor controlling button visibility |
-| `cpu_sensor` | entity | — | CPU usage (0–100 %) |
-| `ram_sensor` | entity | — | RAM usage (0–100 %) |
-| `disk_sensor` | entity | — | Disk usage (0–100 %) |
-| `temperature_sensor` | entity | — | CPU temperature (°C) |
-| `network_up_sensor` | entity | — | Upload speed (MB/s) |
-| `network_down_sensor` | entity | — | Download speed (MB/s) |
-| `uptime_sensor` | entity | — | Uptime in seconds |
-| `boot_action` | action | — | Service call when Boot is pressed |
-| `shutdown_action` | action | — | Service call when Shutdown is pressed |
-| `restart_action` | action | — | Service call when Restart is pressed |
-| `lock_action` | action | — | Service call when Lock is pressed |
-| `sleep_action` | action | — | Service call when Sleep is pressed |
-| `background` | string | `default` | `default` / `dark` / `glass` / `gradient` / `none` |
+| `pc_state_sensor` | entity | -- | Binary sensor controlling button visibility |
+| `cpu_sensor` | entity | -- | CPU usage (0-100 %) |
+| `ram_sensor` | entity | -- | RAM usage (0-100 %) |
+| `gpu_sensor` | entity | -- | GPU usage (0-100 %) |
+| `disk_sensor` | entity | -- | Disk usage (0-100 %) |
+| `temperature_sensor` | entity | -- | CPU temperature (C) |
+| `network_up_sensor` | entity | -- | Upload speed (MB/s) |
+| `network_down_sensor` | entity | -- | Download speed (MB/s) |
+| `uptime_sensor` | entity | -- | Uptime in seconds |
+| `wol_mac` | string | -- | MAC address for Wake on LAN |
+| `shutdown_entity` | entity | -- | Entity to press for shutdown |
+| `restart_entity` | entity | -- | Entity to press for restart |
+| `lock_entity` | entity | -- | Entity to press for lock |
+| `sleep_entity` | entity | -- | Entity to press for sleep |
 | `accent_color` | color | `#4f8ef7` | Primary accent color |
 | `ok_color` | color | `#22c55e` | Online / low-usage color |
 | `warn_color` | color | `#f59e0b` | Medium-usage warning color |
@@ -168,10 +139,14 @@ show_uptime: true
 | `columns` | number | `4` | Number of gauge columns |
 | `gauge_size` | number | `90` | Gauge diameter in px |
 | `compact` | boolean | `false` | Reduce padding |
-| `show_gauges` | boolean | `true` | Show arc gauges |
-| `show_network` | boolean | `true` | Show network chips |
+| `show_cpu` | boolean | `true` | Show CPU gauge |
+| `show_ram` | boolean | `true` | Show RAM gauge |
+| `show_gpu` | boolean | `true` | Show GPU gauge |
+| `show_disk` | boolean | `true` | Show disk gauge |
 | `show_temperature` | boolean | `true` | Show temperature gauge |
+| `show_network` | boolean | `true` | Show network chips |
 | `show_uptime` | boolean | `true` | Show uptime in header |
+| `show_actions` | boolean | `true` | Show quick action buttons |
 
 ---
 

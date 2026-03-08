@@ -121,23 +121,30 @@ class PCCard extends HTMLElement {
       pc_state_sensor: '',
       cpu_sensor: '',
       ram_sensor: '',
+      gpu_sensor: '',
       disk_sensor: '',
       temperature_sensor: '',
       network_up_sensor: '',
       network_down_sensor: '',
       uptime_sensor: '',
+      wol_mac: '',
+      shutdown_entity: '',
+      restart_entity: '',
+      lock_entity: '',
+      sleep_entity: '',
       accent_color: '#4f8ef7',
       danger_color: '#ef4444',
       warn_color: '#f59e0b',
       ok_color: '#22c55e',
-      background: 'default',
       gauge_size: 90,
       show_cpu: true,
       show_ram: true,
+      show_gpu: true,
       show_disk: true,
       show_temperature: true,
       show_network: true,
       show_uptime: true,
+      show_actions: true,
       columns: 4,
       compact: false,
     };
@@ -170,17 +177,37 @@ class PCCard extends HTMLElement {
     return this._config.accent_color;
   }
 
-  async _callAction(key, actionConfig) {
+  async _callAction(key) {
     if (this._busy[key]) return;
+    const cfg = this._config;
     this._busy[key] = true;
     this._render();
     try {
-      const [domain, service] = actionConfig.service.split('.');
-      await this._hass.callService(domain, service, actionConfig.data || {}, actionConfig.target || {});
+      if (key === 'boot') {
+        // Wake on LAN
+        const data = {};
+        if (cfg.wol_mac) data.mac = cfg.wol_mac;
+        if (cfg.wol_ip) data.broadcast_address = cfg.wol_ip;
+        await this._hass.callService('wake_on_lan', 'send_magic_packet', data);
+      } else {
+        // Shutdown / restart / lock / sleep — press a button/switch entity
+        const entityId = cfg[`${key}_entity`];
+        if (entityId) {
+          const domain = entityId.split('.')[0];
+          if (domain === 'button') {
+            await this._hass.callService('button', 'press', {}, { entity_id: entityId });
+          } else if (domain === 'switch') {
+            await this._hass.callService('switch', 'turn_on', {}, { entity_id: entityId });
+          } else if (domain === 'script') {
+            await this._hass.callService('script', 'turn_on', {}, { entity_id: entityId });
+          } else {
+            await this._hass.callService('homeassistant', 'toggle', {}, { entity_id: entityId });
+          }
+        }
+      }
     } catch (e) {
       console.error(`[pc-card] Action ${key} failed:`, e);
     }
-    // Brief cooldown before unblocking
     setTimeout(() => { this._busy[key] = false; this._render(); }, 3000);
   }
 
@@ -190,16 +217,6 @@ class PCCard extends HTMLElement {
     const ok = cfg.ok_color;
     const danger = cfg.danger_color;
     const warn = cfg.warn_color;
-
-    const bg = cfg.background === 'glass'
-      ? 'background: rgba(15, 20, 35, 0.85); backdrop-filter: blur(20px);'
-      : cfg.background === 'dark'
-      ? 'background: #0f1423;'
-      : cfg.background === 'gradient'
-      ? `background: linear-gradient(135deg, #0f1423 0%, #1a1f35 100%);`
-      : cfg.background === 'none'
-      ? 'background: transparent;'
-      : ''; // default = HA card bg
 
     return `
       :host {
@@ -221,7 +238,6 @@ class PCCard extends HTMLElement {
         color: var(--pc-text);
         font-family: var(--primary-font-family, 'Roboto', sans-serif);
         user-select: none;
-        ${bg}
         overflow: hidden;
         position: relative;
       }
@@ -580,6 +596,7 @@ class PCCard extends HTMLElement {
     // Sensor values
     const cpu = getNumericValue(this._hass, cfg.cpu_sensor);
     const ram = getNumericValue(this._hass, cfg.ram_sensor);
+    const gpu = getNumericValue(this._hass, cfg.gpu_sensor);
     const disk = getNumericValue(this._hass, cfg.disk_sensor);
     const temp = getNumericValue(this._hass, cfg.temperature_sensor);
     const netUp = getStateValue(this._hass, cfg.network_up_sensor);
@@ -598,6 +615,8 @@ class PCCard extends HTMLElement {
       gaugesItems.push(renderGauge(cpu, 100, 'CPU', '%', this._accentColor(cpu, 75, 90), gs));
     if (cfg.ram_sensor && cfg.show_ram !== false)
       gaugesItems.push(renderGauge(ram, 100, 'RAM', '%', this._accentColor(ram, 80, 90), gs));
+    if (cfg.gpu_sensor && cfg.show_gpu !== false)
+      gaugesItems.push(renderGauge(gpu, 100, 'GPU', '%', this._accentColor(gpu, 75, 90), gs));
     if (cfg.disk_sensor && cfg.show_disk !== false)
       gaugesItems.push(renderGauge(disk, 100, 'Disk', '%', this._accentColor(disk, 85, 95), gs));
     if (cfg.temperature_sensor && cfg.show_temperature !== false) {
@@ -621,15 +640,15 @@ class PCCard extends HTMLElement {
         label: 'Boot',
         icon: 'mdi:power',
         variant: 'ok',
-        action: cfg.boot_action,
-        showWhen: (o) => o === false, // Only when offline
+        configured: !!cfg.wol_mac,
+        showWhen: (o) => o === false,
       },
       {
         key: 'shutdown',
         label: 'Shutdown',
         icon: 'mdi:power-standby',
         variant: 'danger',
-        action: cfg.shutdown_action,
+        configured: !!cfg.shutdown_entity,
         showWhen: (o) => o === true,
       },
       {
@@ -637,7 +656,7 @@ class PCCard extends HTMLElement {
         label: 'Restart',
         icon: 'mdi:restart',
         variant: 'warn',
-        action: cfg.restart_action,
+        configured: !!cfg.restart_entity,
         showWhen: (o) => o === true,
       },
       {
@@ -645,7 +664,7 @@ class PCCard extends HTMLElement {
         label: 'Lock',
         icon: 'mdi:lock',
         variant: 'accent',
-        action: cfg.lock_action,
+        configured: !!cfg.lock_entity,
         showWhen: (o) => o === true,
       },
       {
@@ -653,13 +672,15 @@ class PCCard extends HTMLElement {
         label: 'Sleep',
         icon: 'mdi:sleep',
         variant: 'accent',
-        action: cfg.sleep_action,
+        configured: !!cfg.sleep_entity,
         showWhen: (o) => o === true,
       },
     ];
 
-    // Filter: only show buttons with an action configured AND where showWhen matches
-    const visibleActions = allActions.filter(a => a.action && a.showWhen(online));
+    // Filter: only show buttons that are configured, allowed, and match current state
+    const visibleActions = cfg.show_actions !== false
+      ? allActions.filter(a => a.configured && a.showWhen(online))
+      : [];
 
     // Build HTML
     const html = `
@@ -736,12 +757,8 @@ class PCCard extends HTMLElement {
 
     // Attach event listeners after render
     this.shadowRoot.querySelectorAll('.action-btn[data-action]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const key = btn.dataset.action;
-        const actionDef = allActions.find(a => a.key === key);
-        if (actionDef && actionDef.action) {
-          this._callAction(key, actionDef.action);
-        }
+      btn.addEventListener('click', () => {
+        this._callAction(btn.dataset.action);
       });
     });
   }
@@ -749,7 +766,7 @@ class PCCard extends HTMLElement {
   getCardSize() {
     let size = 3;
     const cfg = this._config;
-    if (cfg.show_cpu !== false || cfg.show_ram !== false || cfg.show_disk !== false || cfg.show_temperature !== false) size += 2;
+    if (cfg.show_cpu !== false || cfg.show_ram !== false || cfg.show_gpu !== false || cfg.show_disk !== false || cfg.show_temperature !== false) size += 2;
     if (this._config.show_network !== false) size += 1;
     return size;
   }
@@ -763,41 +780,18 @@ class PCCard extends HTMLElement {
 // Uses ha-form (HA's built-in form renderer) which properly handles
 // lazy-loading of sub-components like ha-entity-picker, ha-icon-picker, etc.
 
-const ACTION_KEYS = ['boot', 'shutdown', 'restart', 'lock', 'sleep'];
-const ACTION_LABELS = {
-  boot: 'Boot / Wake on LAN (shown when Offline)',
-  shutdown: 'Shutdown (shown when Online)',
-  restart: 'Restart (shown when Online)',
-  lock: 'Lock (shown when Online)',
-  sleep: 'Sleep (shown when Online)',
-};
-
 // ── Schemas for ha-form ─────────────────────────────────────────────────────
 
 const GENERAL_SCHEMA = [
   { name: 'title', selector: { text: {} } },
   { name: 'icon', selector: { icon: {} } },
-  {
-    name: 'background',
-    selector: {
-      select: {
-        mode: 'dropdown',
-        options: [
-          { value: 'default', label: 'Default' },
-          { value: 'dark', label: 'Dark' },
-          { value: 'glass', label: 'Glass' },
-          { value: 'gradient', label: 'Gradient' },
-          { value: 'none', label: 'None (transparent)' },
-        ],
-      },
-    },
-  },
 ];
 
 const SENSOR_SCHEMA = [
   { name: 'pc_state_sensor',    selector: { entity: { domain: 'binary_sensor' } } },
   { name: 'cpu_sensor',         selector: { entity: { domain: 'sensor' } } },
   { name: 'ram_sensor',         selector: { entity: { domain: 'sensor' } } },
+  { name: 'gpu_sensor',         selector: { entity: { domain: 'sensor' } } },
   { name: 'disk_sensor',        selector: { entity: { domain: 'sensor' } } },
   { name: 'temperature_sensor', selector: { entity: { domain: 'sensor' } } },
   { name: 'network_up_sensor',  selector: { entity: { domain: 'sensor' } } },
@@ -810,53 +804,54 @@ const LAYOUT_SCHEMA = [
   { name: 'gauge_size', selector: { number: { min: 60, max: 140, mode: 'slider' } } },
   { name: 'show_cpu',          selector: { boolean: {} } },
   { name: 'show_ram',          selector: { boolean: {} } },
+  { name: 'show_gpu',          selector: { boolean: {} } },
   { name: 'show_disk',         selector: { boolean: {} } },
   { name: 'show_temperature',  selector: { boolean: {} } },
   { name: 'show_network',      selector: { boolean: {} } },
   { name: 'show_uptime',       selector: { boolean: {} } },
+  { name: 'show_actions',      selector: { boolean: {} } },
   { name: 'compact',           selector: { boolean: {} } },
+];
+
+const WOL_SCHEMA = [
+  { name: 'wol_mac', selector: { text: {} } },
+];
+
+const ACTIONS_SCHEMA = [
+  { name: 'shutdown_entity', selector: { entity: { domain: ['button', 'switch', 'script'] } } },
+  { name: 'restart_entity',  selector: { entity: { domain: ['button', 'switch', 'script'] } } },
+  { name: 'lock_entity',     selector: { entity: { domain: ['button', 'switch', 'script'] } } },
+  { name: 'sleep_entity',    selector: { entity: { domain: ['button', 'switch', 'script'] } } },
 ];
 
 const LABELS = {
   title: 'Card Title',
   icon: 'Icon',
-  background: 'Background Style',
-  pc_state_sensor: 'PC State Sensor',
-  cpu_sensor: 'CPU Usage Sensor',
-  ram_sensor: 'RAM Usage Sensor',
-  disk_sensor: 'Disk Usage Sensor',
-  temperature_sensor: 'CPU Temperature Sensor',
-  network_up_sensor: 'Upload Speed Sensor',
-  network_down_sensor: 'Download Speed Sensor',
-  uptime_sensor: 'Uptime Sensor (seconds)',
+  pc_state_sensor: 'PC State (online/offline)',
+  cpu_sensor: 'CPU Usage',
+  ram_sensor: 'RAM Usage',
+  gpu_sensor: 'GPU Usage',
+  disk_sensor: 'Disk Usage',
+  temperature_sensor: 'CPU Temperature',
+  network_up_sensor: 'Upload Speed',
+  network_down_sensor: 'Download Speed',
+  uptime_sensor: 'Uptime (seconds)',
   columns: 'Gauge Columns',
   gauge_size: 'Gauge Size (px)',
   show_cpu: 'Show CPU Gauge',
   show_ram: 'Show RAM Gauge',
+  show_gpu: 'Show GPU Gauge',
   show_disk: 'Show Disk Gauge',
   show_temperature: 'Show Temperature Gauge',
   show_network: 'Show Network Stats',
   show_uptime: 'Show Uptime',
+  show_actions: 'Show Quick Actions',
   compact: 'Compact Mode',
-  accent_color: 'Accent',
-  ok_color: 'Online / OK',
-  warn_color: 'Warning',
-  danger_color: 'Danger',
-};
-
-// Per-action: service text + target entity + data JSON
-function actionSchema(key) {
-  return [
-    { name: `${key}_service`,       selector: { text: {} } },
-    { name: `${key}_target_entity`, selector: { entity: {} } },
-    { name: `${key}_data_json`,     selector: { text: {} } },
-  ];
-}
-
-const ACTION_FIELD_LABELS = {
-  service: 'Service (e.g. button.press)',
-  target_entity: 'Target entity',
-  data_json: 'Extra data JSON',
+  wol_mac: 'MAC Address (e.g. AA:BB:CC:DD:EE:FF)',
+  shutdown_entity: 'Shutdown',
+  restart_entity: 'Restart',
+  lock_entity: 'Lock',
+  sleep_entity: 'Sleep',
 };
 
 class PCCardEditor extends HTMLElement {
@@ -869,7 +864,6 @@ class PCCardEditor extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    // Push hass to all ha-form instances so their pickers stay current
     this.shadowRoot.querySelectorAll('ha-form').forEach(f => { f.hass = hass; });
   }
 
@@ -886,59 +880,17 @@ class PCCardEditor extends HTMLElement {
     }));
   }
 
-  // Flatten nested action configs into flat keys for ha-form
-  get _formData() {
-    const d = { ...this._config };
-    for (const key of ACTION_KEYS) {
-      const a = this._config[`${key}_action`] || {};
-      d[`${key}_service`] = a.service || '';
-      d[`${key}_target_entity`] = a.target?.entity_id || '';
-      d[`${key}_data_json`] = a.data ? JSON.stringify(a.data) : '';
-    }
-    return d;
-  }
-
-  // Merge ha-form output back, reconstructing nested action objects
-  _mergeFormData(changed) {
-    const merged = { ...this._config, ...changed };
-
-    // Reconstruct *_action objects from flat fields
-    for (const key of ACTION_KEYS) {
-      const svc = merged[`${key}_service`];
-      const ent = merged[`${key}_target_entity`];
-      const dj  = merged[`${key}_data_json`];
-
-      // Clean flat keys from config
-      delete merged[`${key}_service`];
-      delete merged[`${key}_target_entity`];
-      delete merged[`${key}_data_json`];
-
-      if (svc) {
-        const action = { service: svc };
-        if (ent) action.target = { entity_id: ent };
-        if (dj) { try { action.data = JSON.parse(dj); } catch (e) { /* ignore bad JSON */ } }
-        merged[`${key}_action`] = action;
-      } else {
-        delete merged[`${key}_action`];
-      }
-    }
-
-    this._config = merged;
-    this._dispatch();
-  }
-
-  // Create an ha-form element, attach it to a container, wire events
   _createForm(container, schema, computeLabel) {
     const form = document.createElement('ha-form');
     form.hass = this._hass;
-    form.data = this._formData;
+    form.data = this._config;
     form.schema = schema;
     form.computeLabel = computeLabel;
     form.addEventListener('value-changed', (e) => {
       e.stopPropagation();
-      this._mergeFormData(e.detail.value);
-      // Update all forms with fresh data so they stay in sync
-      this.shadowRoot.querySelectorAll('ha-form').forEach(f => { f.data = this._formData; });
+      this._config = { ...this._config, ...e.detail.value };
+      this._dispatch();
+      this.shadowRoot.querySelectorAll('ha-form').forEach(f => { f.data = this._config; });
     });
     container.appendChild(form);
     return form;
@@ -952,7 +904,6 @@ class PCCardEditor extends HTMLElement {
   }
 
   _render() {
-    // Build the editor entirely via DOM API (no innerHTML for ha-form hosts)
     this.shadowRoot.innerHTML = '';
 
     const style = document.createElement('style');
@@ -979,31 +930,22 @@ class PCCardEditor extends HTMLElement {
         width: 44px; height: 34px; padding: 0; border: 1px solid var(--divider-color, #ddd);
         background: none; cursor: pointer; border-radius: 8px;
       }
-      .action-group {
-        margin-bottom: 14px; background: var(--secondary-background-color, #f5f5f5);
-        border-radius: 12px; padding: 12px;
-      }
-      .action-group-label {
-        font-size: 12px; font-weight: 700; margin-bottom: 8px;
-        color: var(--primary-text-color);
-      }
     `;
     this.shadowRoot.appendChild(style);
 
     const editor = document.createElement('div');
     editor.className = 'editor';
-
-    const defaultLabel = (schema) => LABELS[schema.name] || schema.name;
+    const label = (schema) => LABELS[schema.name] || schema.name;
 
     // ── General ──
     editor.appendChild(this._heading('General'));
-    this._createForm(editor, GENERAL_SCHEMA, defaultLabel);
+    this._createForm(editor, GENERAL_SCHEMA, label);
 
-    // ── Colors (native inputs — ha-form color_rgb returns [r,g,b], we use hex) ──
+    // ── Colors ──
     editor.appendChild(this._heading('Colors'));
     const colorRow = document.createElement('div');
     colorRow.className = 'color-row';
-    for (const [key, label] of [['accent_color','Accent'],['ok_color','Online'],['warn_color','Warning'],['danger_color','Danger']]) {
+    for (const [key, lbl] of [['accent_color','Accent'],['ok_color','Online'],['warn_color','Warning'],['danger_color','Danger']]) {
       const item = document.createElement('div');
       item.className = 'color-item';
       const input = document.createElement('input');
@@ -1013,37 +955,28 @@ class PCCardEditor extends HTMLElement {
         this._config = { ...this._config, [key]: input.value };
         this._dispatch();
       });
-      const lbl = document.createElement('span');
-      lbl.textContent = label;
+      const span = document.createElement('span');
+      span.textContent = lbl;
       item.appendChild(input);
-      item.appendChild(lbl);
+      item.appendChild(span);
       colorRow.appendChild(item);
     }
     editor.appendChild(colorRow);
 
     // ── Sensors ──
     editor.appendChild(this._heading('Sensors'));
-    this._createForm(editor, SENSOR_SCHEMA, defaultLabel);
+    this._createForm(editor, SENSOR_SCHEMA, label);
 
     // ── Layout ──
     editor.appendChild(this._heading('Layout'));
-    this._createForm(editor, LAYOUT_SCHEMA, defaultLabel);
+    this._createForm(editor, LAYOUT_SCHEMA, label);
 
     // ── Actions ──
-    editor.appendChild(this._heading('Actions'));
-    for (const key of ACTION_KEYS) {
-      const group = document.createElement('div');
-      group.className = 'action-group';
-      const title = document.createElement('div');
-      title.className = 'action-group-label';
-      title.textContent = ACTION_LABELS[key];
-      group.appendChild(title);
-      this._createForm(group, actionSchema(key), (schema) => {
-        const part = schema.name.replace(`${key}_`, '');
-        return ACTION_FIELD_LABELS[part] || part;
-      });
-      editor.appendChild(group);
-    }
+    editor.appendChild(this._heading('Wake on LAN (boot when offline)'));
+    this._createForm(editor, WOL_SCHEMA, label);
+
+    editor.appendChild(this._heading('Actions (shown when online)'));
+    this._createForm(editor, ACTIONS_SCHEMA, label);
 
     this.shadowRoot.appendChild(editor);
   }
