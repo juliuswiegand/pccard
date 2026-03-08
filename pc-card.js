@@ -762,6 +762,100 @@ class PCCard extends HTMLElement {
 }
 
 // ─── Config Editor ────────────────────────────────────────────────────────────
+// Uses ha-form (HA's built-in form renderer) which properly handles
+// lazy-loading of sub-components like ha-entity-picker, ha-icon-picker, etc.
+
+const ACTION_KEYS = ['boot', 'shutdown', 'restart', 'lock', 'sleep'];
+const ACTION_LABELS = {
+  boot: 'Boot / Wake on LAN (shown when Offline)',
+  shutdown: 'Shutdown (shown when Online)',
+  restart: 'Restart (shown when Online)',
+  lock: 'Lock (shown when Online)',
+  sleep: 'Sleep (shown when Online)',
+};
+
+// ── Schemas for ha-form ─────────────────────────────────────────────────────
+
+const GENERAL_SCHEMA = [
+  { name: 'title', selector: { text: {} } },
+  { name: 'icon', selector: { icon: {} } },
+  {
+    name: 'background',
+    selector: {
+      select: {
+        mode: 'dropdown',
+        options: [
+          { value: 'default', label: 'Default' },
+          { value: 'dark', label: 'Dark' },
+          { value: 'glass', label: 'Glass' },
+          { value: 'gradient', label: 'Gradient' },
+          { value: 'none', label: 'None (transparent)' },
+        ],
+      },
+    },
+  },
+];
+
+const SENSOR_SCHEMA = [
+  { name: 'pc_state_sensor',    selector: { entity: { domain: 'binary_sensor' } } },
+  { name: 'cpu_sensor',         selector: { entity: { domain: 'sensor' } } },
+  { name: 'ram_sensor',         selector: { entity: { domain: 'sensor' } } },
+  { name: 'disk_sensor',        selector: { entity: { domain: 'sensor' } } },
+  { name: 'temperature_sensor', selector: { entity: { domain: 'sensor' } } },
+  { name: 'network_up_sensor',  selector: { entity: { domain: 'sensor' } } },
+  { name: 'network_down_sensor',selector: { entity: { domain: 'sensor' } } },
+  { name: 'uptime_sensor',      selector: { entity: { domain: 'sensor' } } },
+];
+
+const LAYOUT_SCHEMA = [
+  { name: 'columns',    selector: { number: { min: 2, max: 6, mode: 'box' } } },
+  { name: 'gauge_size', selector: { number: { min: 60, max: 140, mode: 'slider' } } },
+  { name: 'show_gauges',      selector: { boolean: {} } },
+  { name: 'show_network',     selector: { boolean: {} } },
+  { name: 'show_temperature', selector: { boolean: {} } },
+  { name: 'show_uptime',      selector: { boolean: {} } },
+  { name: 'compact',          selector: { boolean: {} } },
+];
+
+const LABELS = {
+  title: 'Card Title',
+  icon: 'Icon',
+  background: 'Background Style',
+  pc_state_sensor: 'PC State Sensor',
+  cpu_sensor: 'CPU Usage Sensor',
+  ram_sensor: 'RAM Usage Sensor',
+  disk_sensor: 'Disk Usage Sensor',
+  temperature_sensor: 'CPU Temperature Sensor',
+  network_up_sensor: 'Upload Speed Sensor',
+  network_down_sensor: 'Download Speed Sensor',
+  uptime_sensor: 'Uptime Sensor (seconds)',
+  columns: 'Gauge Columns',
+  gauge_size: 'Gauge Size (px)',
+  show_gauges: 'Show Gauges',
+  show_network: 'Show Network Stats',
+  show_temperature: 'Show Temperature',
+  show_uptime: 'Show Uptime',
+  compact: 'Compact Mode',
+  accent_color: 'Accent',
+  ok_color: 'Online / OK',
+  warn_color: 'Warning',
+  danger_color: 'Danger',
+};
+
+// Per-action: service text + target entity + data JSON
+function actionSchema(key) {
+  return [
+    { name: `${key}_service`,       selector: { text: {} } },
+    { name: `${key}_target_entity`, selector: { entity: {} } },
+    { name: `${key}_data_json`,     selector: { text: {} } },
+  ];
+}
+
+const ACTION_FIELD_LABELS = {
+  service: 'Service (e.g. button.press)',
+  target_entity: 'Target entity',
+  data_json: 'Extra data JSON',
+};
 
 class PCCardEditor extends HTMLElement {
   constructor() {
@@ -773,10 +867,8 @@ class PCCardEditor extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    // Keep existing pickers in sync without a full re-render
-    this.shadowRoot.querySelectorAll('ha-entity-picker').forEach(p => {
-      p.hass = hass;
-    });
+    // Push hass to all ha-form instances so their pickers stay current
+    this.shadowRoot.querySelectorAll('ha-form').forEach(f => { f.hass = hass; });
   }
 
   setConfig(config) {
@@ -792,258 +884,166 @@ class PCCardEditor extends HTMLElement {
     }));
   }
 
-  // Plain text / number input
-  _field(key, label, type = 'text', hint = '') {
-    const val = this._config[key] ?? '';
-    return `
-      <div class="field">
-        <label>${label}</label>
-        ${hint ? `<div class="hint">${hint}</div>` : ''}
-        <input type="${type}" name="${key}" value="${val}" placeholder="${hint || label}"/>
-      </div>
-    `;
+  // Flatten nested action configs into flat keys for ha-form
+  get _formData() {
+    const d = { ...this._config };
+    for (const key of ACTION_KEYS) {
+      const a = this._config[`${key}_action`] || {};
+      d[`${key}_service`] = a.service || '';
+      d[`${key}_target_entity`] = a.target?.entity_id || '';
+      d[`${key}_data_json`] = a.data ? JSON.stringify(a.data) : '';
+    }
+    return d;
   }
 
-  // Placeholder slot — filled imperatively with ha-entity-picker after innerHTML is set
-  _entityPicker(key, label, domain = '') {
-    return `
-      <div class="field">
-        <div class="entity-picker-slot"
-             data-key="${key}"
-             data-label="${label}"
-             data-domain="${domain}">
-        </div>
-      </div>
-    `;
+  // Merge ha-form output back, reconstructing nested action objects
+  _mergeFormData(changed) {
+    const merged = { ...this._config, ...changed };
+
+    // Reconstruct *_action objects from flat fields
+    for (const key of ACTION_KEYS) {
+      const svc = merged[`${key}_service`];
+      const ent = merged[`${key}_target_entity`];
+      const dj  = merged[`${key}_data_json`];
+
+      // Clean flat keys from config
+      delete merged[`${key}_service`];
+      delete merged[`${key}_target_entity`];
+      delete merged[`${key}_data_json`];
+
+      if (svc) {
+        const action = { service: svc };
+        if (ent) action.target = { entity_id: ent };
+        if (dj) { try { action.data = JSON.parse(dj); } catch (e) { /* ignore bad JSON */ } }
+        merged[`${key}_action`] = action;
+      } else {
+        delete merged[`${key}_action`];
+      }
+    }
+
+    this._config = merged;
+    this._dispatch();
   }
 
-  // Hydrate every .entity-picker-slot with a real ha-entity-picker element
-  _hydrateEntityPickers() {
-    this.shadowRoot.querySelectorAll('.entity-picker-slot').forEach(slot => {
-      const key = slot.dataset.key;
-      const label = slot.dataset.label;
-      const domain = slot.dataset.domain;
-
-      const picker = document.createElement('ha-entity-picker');
-      picker.hass = this._hass;
-      picker.value = this._config[key] || '';
-      picker.label = label;
-      picker.allowCustomEntity = true;
-      if (domain) picker.includeDomains = domain.split(',');
-
-      picker.addEventListener('value-changed', (e) => {
-        this._config = { ...this._config, [key]: e.detail.value || undefined };
-        this._dispatch();
-      });
-
-      slot.appendChild(picker);
+  // Create an ha-form element, attach it to a container, wire events
+  _createForm(container, schema, computeLabel) {
+    const form = document.createElement('ha-form');
+    form.hass = this._hass;
+    form.data = this._formData;
+    form.schema = schema;
+    form.computeLabel = computeLabel;
+    form.addEventListener('value-changed', (e) => {
+      e.stopPropagation();
+      this._mergeFormData(e.detail.value);
+      // Update all forms with fresh data so they stay in sync
+      this.shadowRoot.querySelectorAll('ha-form').forEach(f => { f.data = this._formData; });
     });
+    container.appendChild(form);
+    return form;
   }
 
-  _toggle(key, label) {
-    const checked = this._config[key] !== false;
-    return `
-      <div class="field toggle-field">
-        <label>${label}</label>
-        <label class="switch">
-          <input type="checkbox" name="${key}" ${checked ? 'checked' : ''}/>
-          <span class="slider"></span>
-        </label>
-      </div>
-    `;
-  }
-
-  _section(title) {
-    return `<div class="section-title">${title}</div>`;
-  }
-
-  _actionFields(key, label) {
-    const a = this._config[`${key}_action`] || {};
-    return `
-      <div class="action-group">
-        <div class="action-group-label">${label}</div>
-        <div class="action-row-label">Service (domain.service)</div>
-        <input type="text" name="${key}_service" value="${a.service || ''}" placeholder="e.g. button.press"/>
-        <div class="action-row-label" style="margin-top:6px">Target entity (optional)</div>
-        <div class="entity-picker-slot action-entity-slot"
-             data-action-key="${key}"
-             data-label="Target entity">
-        </div>
-        <div class="action-row-label" style="margin-top:6px">Extra data JSON (optional)</div>
-        <input type="text" name="${key}_data" value="${a.data ? JSON.stringify(a.data) : ''}" placeholder='e.g. {"mac":"AA:BB:CC:DD:EE:FF"}'/>
-      </div>
-    `;
-  }
-
-  // Hydrate action entity pickers (separate from sensor pickers)
-  _hydrateActionPickers() {
-    this.shadowRoot.querySelectorAll('.action-entity-slot').forEach(slot => {
-      const actionKey = slot.dataset.actionKey;
-      const label = slot.dataset.label;
-      const current = this._config[`${actionKey}_action`] || {};
-      const currentEntityId = current.target?.entity_id || '';
-
-      const picker = document.createElement('ha-entity-picker');
-      picker.hass = this._hass;
-      picker.value = currentEntityId;
-      picker.label = label;
-      picker.allowCustomEntity = true;
-
-      picker.addEventListener('value-changed', (e) => {
-        const actionKey2 = slot.dataset.actionKey;
-        const actionCfgKey = `${actionKey2}_action`;
-        const existing = { ...this._config[actionCfgKey] };
-        const val = e.detail.value;
-        if (val) {
-          existing.target = { entity_id: val };
-        } else {
-          delete existing.target;
-        }
-        this._config = { ...this._config, [actionCfgKey]: existing };
-        this._dispatch();
-      });
-
-      slot.appendChild(picker);
-    });
+  _heading(text) {
+    const h = document.createElement('div');
+    h.className = 'section-title';
+    h.textContent = text;
+    return h;
   }
 
   _render() {
-    const cfg = this._config;
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host { display: block; font-family: var(--primary-font-family, sans-serif); }
-        .editor { padding: 4px 0; }
-        .section-title {
-          font-size: 11px; font-weight: 700; letter-spacing: 1px;
-          text-transform: uppercase; color: var(--primary-color, #4f8ef7);
-          margin: 16px 0 8px; padding-bottom: 4px;
-          border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.1));
-        }
-        .field { margin-bottom: 10px; }
-        .field label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; color: var(--primary-text-color); }
-        .hint { font-size: 11px; color: var(--secondary-text-color); margin-bottom: 4px; }
-        /* ha-entity-picker fills its container naturally */
-        .entity-picker-slot ha-entity-picker { display: block; }
-        .field input[type="text"], .field input[type="number"] {
-          width: 100%; box-sizing: border-box;
-          padding: 7px 10px; border-radius: 8px;
-          border: 1px solid var(--divider-color, #ddd);
-          background: var(--card-background-color, white);
-          color: var(--primary-text-color);
-          font-size: 13px;
-        }
-        .toggle-field { display: flex; align-items: center; justify-content: space-between; }
-        .switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; inset: 0; background: #ccc; border-radius: 22px; cursor: pointer; transition: .3s; }
-        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .3s; }
-        input:checked + .slider { background: var(--primary-color, #4f8ef7); }
-        input:checked + .slider:before { transform: translateX(18px); }
-        .action-group { margin-bottom: 12px; background: var(--secondary-background-color, #f5f5f5); border-radius: 10px; padding: 10px; }
-        .action-group-label { font-size: 12px; font-weight: 700; margin-bottom: 8px; color: var(--primary-text-color); }
-        .action-row-label { font-size: 11px; color: var(--secondary-text-color); margin-bottom: 3px; }
-        .action-group input[type="text"] { width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, white); color: var(--primary-text-color); font-size: 12px; font-family: monospace; }
-        .action-entity-slot ha-entity-picker { display: block; }
-        .color-row { display: flex; gap: 8px; flex-wrap: wrap; }
-        .color-item { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: var(--secondary-text-color); }
-        .color-item input[type="color"] { width: 40px; height: 32px; padding: 0; border: none; background: none; cursor: pointer; border-radius: 6px; }
-        select { width: 100%; box-sizing: border-box; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, white); color: var(--primary-text-color); font-size: 13px; }
-      </style>
-      <div class="editor">
+    // Build the editor entirely via DOM API (no innerHTML for ha-form hosts)
+    this.shadowRoot.innerHTML = '';
 
-        ${this._section('General')}
-        ${this._field('title', 'Card Title')}
-        ${this._field('icon', 'Icon', 'text', 'e.g. mdi:desktop-tower-monitor')}
-
-        <div class="field">
-          <label>Background Style</label>
-          <select name="background">
-            ${['default','dark','glass','gradient','none'].map(v =>
-              `<option value="${v}" ${cfg.background === v ? 'selected' : ''}>${v.charAt(0).toUpperCase() + v.slice(1)}</option>`
-            ).join('')}
-          </select>
-        </div>
-
-        ${this._section('Colors')}
-        <div class="field">
-          <label>Theme Colors</label>
-          <div class="color-row">
-            ${[['accent_color','Accent'],['ok_color','Online'],['warn_color','Warning'],['danger_color','Danger']].map(([k,l]) => `
-              <div class="color-item">
-                <input type="color" name="${k}" value="${cfg[k] || '#ffffff'}"/>
-                ${l}
-              </div>
-            `).join('')}
-          </div>
-        </div>
-
-        ${this._section('Sensors')}
-        ${this._entityPicker('pc_state_sensor',    'PC State Sensor',          'binary_sensor')}
-        ${this._entityPicker('cpu_sensor',          'CPU Usage Sensor',         'sensor')}
-        ${this._entityPicker('ram_sensor',          'RAM Usage Sensor',         'sensor')}
-        ${this._entityPicker('disk_sensor',         'Disk Usage Sensor',        'sensor')}
-        ${this._entityPicker('temperature_sensor',  'CPU Temp Sensor',          'sensor')}
-        ${this._entityPicker('network_up_sensor',   'Upload Speed Sensor',      'sensor')}
-        ${this._entityPicker('network_down_sensor', 'Download Speed Sensor',    'sensor')}
-        ${this._entityPicker('uptime_sensor',       'Uptime Sensor (seconds)',  'sensor')}
-
-        ${this._section('Layout')}
-        ${this._field('columns',    'Gauge Columns',  'number')}
-        ${this._field('gauge_size', 'Gauge Size (px)','number')}
-        ${this._toggle('show_gauges',      'Show Gauges')}
-        ${this._toggle('show_network',     'Show Network Stats')}
-        ${this._toggle('show_temperature', 'Show Temperature')}
-        ${this._toggle('show_uptime',      'Show Uptime')}
-        ${this._toggle('compact',          'Compact Mode')}
-
-        ${this._section('Actions (only shown when state matches)')}
-        ${this._actionFields('boot',     'Boot / Wake on LAN — shown when Offline')}
-        ${this._actionFields('shutdown', 'Shutdown — shown when Online')}
-        ${this._actionFields('restart',  'Restart — shown when Online')}
-        ${this._actionFields('lock',     'Lock — shown when Online')}
-        ${this._actionFields('sleep',    'Sleep — shown when Online')}
-
-      </div>
-    `;
-
-    // Hydrate entity pickers (must happen after innerHTML is set)
-    this._hydrateEntityPickers();
-    this._hydrateActionPickers();
-
-    // Attach listeners for plain inputs / selects / checkboxes
-    this.shadowRoot.querySelectorAll('input:not([type="color"]), select').forEach(el => {
-      el.addEventListener('change', () => this._handleChange(el));
-    });
-    this.shadowRoot.querySelectorAll('input[type="color"]').forEach(el => {
-      el.addEventListener('input', () => this._handleChange(el));
-    });
-  }
-
-  _handleChange(el) {
-    const name = el.name;
-    const value = el.type === 'checkbox' ? el.checked : el.value;
-
-    // Action service / data fields
-    const actionMatch = name.match(/^(boot|shutdown|restart|lock|sleep)_(service|data)$/);
-    if (actionMatch) {
-      const [, key, part] = actionMatch;
-      const actionCfgKey = `${key}_action`;
-      const current = { ...this._config[actionCfgKey] };
-      if (part === 'service') {
-        current.service = value;
-      } else {
-        try { current[part] = value ? JSON.parse(value) : undefined; } catch (e) {}
+    const style = document.createElement('style');
+    style.textContent = `
+      :host {
+        display: block;
+        font-family: var(--primary-font-family, sans-serif);
       }
-      this._config = { ...this._config, [actionCfgKey]: current };
-    } else if (name === 'columns' || name === 'gauge_size') {
-      this._config = { ...this._config, [name]: parseInt(value) || undefined };
-    } else if (el.type === 'checkbox') {
-      this._config = { ...this._config, [name]: value };
-    } else {
-      this._config = { ...this._config, [name]: value };
+      .editor { padding: 4px 0; }
+      .section-title {
+        font-size: 11px; font-weight: 700; letter-spacing: 1px;
+        text-transform: uppercase; color: var(--primary-color, #4f8ef7);
+        margin: 18px 0 8px; padding-bottom: 4px;
+        border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.1));
+      }
+      .section-title:first-child { margin-top: 4px; }
+      ha-form { display: block; margin-bottom: 4px; }
+      .color-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 4px 0 8px; }
+      .color-item {
+        display: flex; flex-direction: column; align-items: center; gap: 4px;
+        font-size: 11px; color: var(--secondary-text-color);
+      }
+      .color-item input[type="color"] {
+        width: 44px; height: 34px; padding: 0; border: 1px solid var(--divider-color, #ddd);
+        background: none; cursor: pointer; border-radius: 8px;
+      }
+      .action-group {
+        margin-bottom: 14px; background: var(--secondary-background-color, #f5f5f5);
+        border-radius: 12px; padding: 12px;
+      }
+      .action-group-label {
+        font-size: 12px; font-weight: 700; margin-bottom: 8px;
+        color: var(--primary-text-color);
+      }
+    `;
+    this.shadowRoot.appendChild(style);
+
+    const editor = document.createElement('div');
+    editor.className = 'editor';
+
+    const defaultLabel = (schema) => LABELS[schema.name] || schema.name;
+
+    // ── General ──
+    editor.appendChild(this._heading('General'));
+    this._createForm(editor, GENERAL_SCHEMA, defaultLabel);
+
+    // ── Colors (native inputs — ha-form color_rgb returns [r,g,b], we use hex) ──
+    editor.appendChild(this._heading('Colors'));
+    const colorRow = document.createElement('div');
+    colorRow.className = 'color-row';
+    for (const [key, label] of [['accent_color','Accent'],['ok_color','Online'],['warn_color','Warning'],['danger_color','Danger']]) {
+      const item = document.createElement('div');
+      item.className = 'color-item';
+      const input = document.createElement('input');
+      input.type = 'color';
+      input.value = this._config[key] || '#ffffff';
+      input.addEventListener('input', () => {
+        this._config = { ...this._config, [key]: input.value };
+        this._dispatch();
+      });
+      const lbl = document.createElement('span');
+      lbl.textContent = label;
+      item.appendChild(input);
+      item.appendChild(lbl);
+      colorRow.appendChild(item);
+    }
+    editor.appendChild(colorRow);
+
+    // ── Sensors ──
+    editor.appendChild(this._heading('Sensors'));
+    this._createForm(editor, SENSOR_SCHEMA, defaultLabel);
+
+    // ── Layout ──
+    editor.appendChild(this._heading('Layout'));
+    this._createForm(editor, LAYOUT_SCHEMA, defaultLabel);
+
+    // ── Actions ──
+    editor.appendChild(this._heading('Actions'));
+    for (const key of ACTION_KEYS) {
+      const group = document.createElement('div');
+      group.className = 'action-group';
+      const title = document.createElement('div');
+      title.className = 'action-group-label';
+      title.textContent = ACTION_LABELS[key];
+      group.appendChild(title);
+      this._createForm(group, actionSchema(key), (schema) => {
+        const part = schema.name.replace(`${key}_`, '');
+        return ACTION_FIELD_LABELS[part] || part;
+      });
+      editor.appendChild(group);
     }
 
-    this._dispatch();
+    this.shadowRoot.appendChild(editor);
   }
 }
 

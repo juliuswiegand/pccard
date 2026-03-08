@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:community.home-assistant.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:developers.home-assistant.io)",
+      "WebFetch(domain:gist.github.com)"
+    ]
+  }
+}
