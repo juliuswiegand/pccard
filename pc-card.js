@@ -86,7 +86,7 @@ function renderGauge(value, max, label, unit, color, size = 80) {
         <path d="${arcPath(cx, cy, r, start, end)}"
               fill="none" stroke="${color}" stroke-width="${size * 0.09}"
               stroke-linecap="round"
-              style="filter: drop-shadow(0 0 4px ${color}88)"/>
+              />
         ` : ''}
         <!-- Center text -->
         <text x="${cx}" y="${cy - 2}" text-anchor="middle"
@@ -118,29 +118,26 @@ class PCCard extends HTMLElement {
     return {
       title: 'My PC',
       icon: 'mdi:desktop-tower-monitor',
-      pc_state_sensor: 'binary_sensor.pc_online',
-      cpu_sensor: 'sensor.pc_cpu_usage',
-      ram_sensor: 'sensor.pc_memory_usage',
-      disk_sensor: 'sensor.pc_disk_usage',
-      temperature_sensor: 'sensor.pc_cpu_temp',
-      network_up_sensor: 'sensor.pc_network_upload',
-      network_down_sensor: 'sensor.pc_network_download',
-      uptime_sensor: 'sensor.pc_uptime',
-      boot_action: { service: 'wake_on_lan.send_magic_packet', data: { mac: 'AA:BB:CC:DD:EE:FF' } },
-      shutdown_action: { service: 'button.press', target: { entity_id: 'button.pc_shutdown' } },
-      restart_action: { service: 'button.press', target: { entity_id: 'button.pc_restart' } },
-      lock_action: { service: 'button.press', target: { entity_id: 'button.pc_lock' } },
-      sleep_action: { service: 'button.press', target: { entity_id: 'button.pc_sleep' } },
+      pc_state_sensor: '',
+      cpu_sensor: '',
+      ram_sensor: '',
+      disk_sensor: '',
+      temperature_sensor: '',
+      network_up_sensor: '',
+      network_down_sensor: '',
+      uptime_sensor: '',
       accent_color: '#4f8ef7',
       danger_color: '#ef4444',
       warn_color: '#f59e0b',
       ok_color: '#22c55e',
       background: 'default',
       gauge_size: 90,
-      show_gauges: true,
+      show_cpu: true,
+      show_ram: true,
+      show_disk: true,
+      show_temperature: true,
       show_network: true,
       show_uptime: true,
-      show_temperature: true,
       columns: 4,
       compact: false,
     };
@@ -597,13 +594,13 @@ class PCCard extends HTMLElement {
     const gaugesItems = [];
     const gs = clamp(cfg.gauge_size || 90, 60, 140);
 
-    if (cfg.cpu_sensor && cfg.show_gauges !== false)
+    if (cfg.cpu_sensor && cfg.show_cpu !== false)
       gaugesItems.push(renderGauge(cpu, 100, 'CPU', '%', this._accentColor(cpu, 75, 90), gs));
-    if (cfg.ram_sensor && cfg.show_gauges !== false)
+    if (cfg.ram_sensor && cfg.show_ram !== false)
       gaugesItems.push(renderGauge(ram, 100, 'RAM', '%', this._accentColor(ram, 80, 90), gs));
-    if (cfg.disk_sensor && cfg.show_gauges !== false)
+    if (cfg.disk_sensor && cfg.show_disk !== false)
       gaugesItems.push(renderGauge(disk, 100, 'Disk', '%', this._accentColor(disk, 85, 95), gs));
-    if (cfg.temperature_sensor && cfg.show_temperature !== false && cfg.show_gauges !== false) {
+    if (cfg.temperature_sensor && cfg.show_temperature !== false) {
       const tempColor = this._accentColor(temp, 70, 85);
       gaugesItems.push(renderGauge(temp, 100, 'Temp', '°C', tempColor, gs));
     }
@@ -751,7 +748,8 @@ class PCCard extends HTMLElement {
 
   getCardSize() {
     let size = 3;
-    if (this._config.show_gauges !== false) size += 2;
+    const cfg = this._config;
+    if (cfg.show_cpu !== false || cfg.show_ram !== false || cfg.show_disk !== false || cfg.show_temperature !== false) size += 2;
     if (this._config.show_network !== false) size += 1;
     return size;
   }
@@ -810,11 +808,13 @@ const SENSOR_SCHEMA = [
 const LAYOUT_SCHEMA = [
   { name: 'columns',    selector: { number: { min: 2, max: 6, mode: 'box' } } },
   { name: 'gauge_size', selector: { number: { min: 60, max: 140, mode: 'slider' } } },
-  { name: 'show_gauges',      selector: { boolean: {} } },
-  { name: 'show_network',     selector: { boolean: {} } },
-  { name: 'show_temperature', selector: { boolean: {} } },
-  { name: 'show_uptime',      selector: { boolean: {} } },
-  { name: 'compact',          selector: { boolean: {} } },
+  { name: 'show_cpu',          selector: { boolean: {} } },
+  { name: 'show_ram',          selector: { boolean: {} } },
+  { name: 'show_disk',         selector: { boolean: {} } },
+  { name: 'show_temperature',  selector: { boolean: {} } },
+  { name: 'show_network',      selector: { boolean: {} } },
+  { name: 'show_uptime',       selector: { boolean: {} } },
+  { name: 'compact',           selector: { boolean: {} } },
 ];
 
 const LABELS = {
@@ -831,9 +831,11 @@ const LABELS = {
   uptime_sensor: 'Uptime Sensor (seconds)',
   columns: 'Gauge Columns',
   gauge_size: 'Gauge Size (px)',
-  show_gauges: 'Show Gauges',
+  show_cpu: 'Show CPU Gauge',
+  show_ram: 'Show RAM Gauge',
+  show_disk: 'Show Disk Gauge',
+  show_temperature: 'Show Temperature Gauge',
   show_network: 'Show Network Stats',
-  show_temperature: 'Show Temperature',
   show_uptime: 'Show Uptime',
   compact: 'Compact Mode',
   accent_color: 'Accent',
